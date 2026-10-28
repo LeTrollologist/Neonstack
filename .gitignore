@@ -1,0 +1,17 @@
+bin/
+obj/
+dist/
+*.user
+*.suo
+.vs/
+.idea/
+best.txt
+progress.txt
+settings.txt
+scores.txt
+*.out.txt
+*.err.txt
+dbg.txt
+dbg.err.txt
+*.bak
+*.log

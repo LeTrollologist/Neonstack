@@ -8,12 +8,37 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>NeonStack</RootNamespace>
     <AssemblyName>NeonStack</AssemblyName>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <Product>NEON STACK</Product>
+    <Company>Audax Softworks</Company>
+    <Authors>Audax Softworks</Authors>
+    <Description>A neon Tetris clone on the BRUTAL framework.</Description>
+    <Copyright>Copyright (c) 2026 Audax Softworks</Copyright>
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Pin these to the exact versions you see on https://www.nuget.org/profiles/Ahwoo -->
-    <PackageReference Include="Ahwoo.Brutal.Core" Version="*" />
-    <PackageReference Include="Ahwoo.Brutal.Glfw" Version="*" />
+    <!-- Pinned: floating versions make builds non-reproducible (see https://www.nuget.org/profiles/Ahwoo). -->
+    <PackageReference Include="Ahwoo.Brutal.Core" Version="2026.10.4" />
+    <PackageReference Include="Ahwoo.Brutal.Glfw" Version="2026.10.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- tools/ contains the standalone logo generator, not part of the game assembly. -->
+    <Compile Remove="tools\**" />
+    <None Remove="tools\**" />
+    <EmbeddedResource Remove="tools\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The BRUTAL licence requires NOTICE.txt to ship next to the executable. -->
+    <None Update="NOTICE.txt" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Official BRUTAL logo, shown unaltered (scaled) before gameplay as required by licence 2.2. -->
+    <EmbeddedResource Include="Assets\logo_brutal_wht.png" LogicalName="NeonStack.Assets.logo_brutal_wht.png" />
+    <!-- Generated Audax Softworks logo, shown on the first splash screen. -->
+    <EmbeddedResource Include="Assets\logo_audax.png" LogicalName="NeonStack.Assets.logo_audax.png" />
+    <None Update="LICENSE" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

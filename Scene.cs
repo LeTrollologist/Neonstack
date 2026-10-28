@@ -8,13 +8,17 @@ public sealed class Scene
     static readonly uint Dim = Framebuffer.Hex(0x7C84A8);
     static readonly uint Ink = Framebuffer.Hex(0xEEF1FF);
 
+    // Official BRUTAL logo (white on transparent) and the generated Audax Softworks logo.
+    static readonly ImageData BrutalLogo = ImageData.LoadEmbedded("NeonStack.Assets.logo_brutal_wht.png");
+    static readonly ImageData AudaxLogo = ImageData.LoadEmbedded("NeonStack.Assets.logo_audax.png");
+
     static uint Col(int type) => Framebuffer.Hex(TetrisGame.Palette[type]);
 
     public void Render(Framebuffer fb, TetrisGame g)
     {
         Background(fb, g);
 
-        float sh = g.Shake;
+        float sh = Settings.Current.Shake ? g.Shake : 0f;
         int ox = (int)(Math.Sin(g.Time * 97f) * sh), oy = (int)(Math.Cos(g.Time * 83f) * sh);
         int bx = TetrisGame.OriginX + ox, by = TetrisGame.OriginY + oy;
 
@@ -35,6 +39,13 @@ public sealed class Scene
             fb.TextCentered(g.Msg, by + 110 - rise, 3, c);
         }
 
+        foreach (var p in g.Popups)
+        {
+            float k = 1f - p.T / p.Life;
+            uint c = Framebuffer.Lerp(Framebuffer.Hex(0x0A0B14), p.Color, Math.Clamp(k * 1.5f, 0f, 1f));
+            fb.Text(p.Text, (int)p.X - Framebuffer.TextWidth(p.Text, 3) / 2, (int)p.Y, 3, c);
+        }
+
         switch (g.Phase)
         {
             case Phase.Title: Title(fb, g); break;
@@ -43,16 +54,24 @@ public sealed class Scene
                 fb.TextCentered("PAUSED", 140, 6, Ink);
                 fb.TextCentered("P TO RESUME", 190, 2, Dim);
                 break;
+            case Phase.LevelClear: LevelClearScreen(fb, g); break;
             case Phase.Over:
                 fb.RectA(0, 0, Framebuffer.W, Framebuffer.H, Black, 160);
-                fb.TextCentered("GAME OVER", 110, 6, Framebuffer.Hex(0xFF4D6D));
-                fb.TextCentered("SCORE " + g.Score, 175, 3, Ink);
-                if (g.Score > 0 && g.Score >= g.Best) fb.TextCentered("NEW BEST", 205, 2, Framebuffer.Hex(0xFFD93D));
-                if ((int)(g.Time * 2) % 2 == 0) fb.TextCentered("ENTER TO RETRY", 250, 2, Dim);
+                fb.TextCentered("GAME OVER", 100, 6, Framebuffer.Hex(0xFF4D6D));
+                fb.TextCentered("LEVEL " + g.Level + "  " + g.LevelName, 160, 2, Dim);
+                fb.TextCentered("SCORE " + g.Score, 184, 3, Ink);
+                if (g.Score > 0 && g.Score >= g.Best) fb.TextCentered("NEW BEST", 212, 2, Framebuffer.Hex(0xFFD93D));
+                if ((int)(g.Time * 2) % 2 == 0) fb.TextCentered("ENTER TO RETRY LEVEL", 254, 2, Dim);
                 break;
+            case Phase.Won: WonScreen(fb, g); break;
+            case Phase.Credits: CreditsScreen(fb, g); break;
+            case Phase.Settings: SettingsScreen(fb, g); break;
+            case Phase.Leaderboard: LeaderboardScreen(fb, g); break;
+            case Phase.NameEntry: NameEntryScreen(fb, g); break;
         }
 
-        fb.Scanlines();
+        if (g.Flash > 0) fb.RectAdd(0, 0, Framebuffer.W, Framebuffer.H, g.FlashColor, (int)(g.Flash * 90f));
+        if (Settings.Current.Scanlines) fb.Scanlines();
     }
 
     // ------------------------------------------------------------ background
@@ -60,7 +79,7 @@ public sealed class Scene
     {
         uint top = Framebuffer.Hex(0x0A0B14), bot = Framebuffer.Hex(0x1A1033);
         for (int y = 0; y < Framebuffer.H; y++)
-            Array.Fill(fb.Pixels, Framebuffer.Lerp(top, bot, y / (float)Framebuffer.H), y * Framebuffer.W, Framebuffer.W);
+            fb.FillRow(y, Framebuffer.Lerp(top, bot, y / (float)Framebuffer.H));
 
         float t = g.Time * 0.25f;
         int lv = g.Level;
@@ -113,7 +132,7 @@ public sealed class Scene
             var cells = TetrisGame.Shapes[g.Cur.Type][g.Cur.Rot];
             uint c = Col(g.Cur.Type);
             int gy = g.GhostY();
-            if (gy != g.Cur.Y)
+            if (Settings.Current.Ghost && gy != g.Cur.Y)
                 foreach (var s in cells)
                 {
                     int px = bx + (g.Cur.X + s.x) * C, py = by + (gy + s.y) * C;
@@ -149,8 +168,9 @@ public sealed class Scene
 
         Stat(fb, "SCORE", g.Score.ToString(), 60, 130, Ink);
         Stat(fb, "BEST", g.Best.ToString(), 60, 180, Dim);
-        Stat(fb, "LEVEL", g.Level.ToString(), 60, 230, Ink);
-        Stat(fb, "LINES", g.Lines.ToString(), 60, 280, Ink);
+        Stat(fb, "LEVEL", g.Level + "/" + TetrisGame.Levels.Length, 60, 226, Ink);
+        Stat(fb, "GOAL", g.LevelLines + "/" + g.TargetLines, 60, 276, Ink);
+        fb.Text(g.LevelName, 60, 334, 2, Framebuffer.Hex(0x5B6288));
 
         fb.Text("NEXT", 440, 24, 2, Dim);
         for (int i = 0; i < 3; i++)
@@ -194,18 +214,205 @@ public sealed class Scene
         int x = (Framebuffer.W - Framebuffer.TextWidth(name, scale)) / 2;
         for (int i = 0; i < name.Length; i++)
         {
-            int bob = (int)(Math.Sin(g.Time * 3f + i * 0.6f) * 4);
+            int bob = (int)(Math.Sin(g.Time * 3f + i * 0.6f) * 3);
             uint c = Col(i % 7);
-            fb.Text(name[i].ToString(), x + i * 4 * scale + 2, 78 + bob + 2, scale, Framebuffer.Lerp(c, Black, 0.65f));
-            fb.Text(name[i].ToString(), x + i * 4 * scale, 78 + bob, scale, c);
+            fb.Text(name[i].ToString(), x + i * 4 * scale + 2, 64 + bob + 2, scale, Framebuffer.Lerp(c, Black, 0.65f));
+            fb.Text(name[i].ToString(), x + i * 4 * scale, 64 + bob, scale, c);
         }
-        if ((int)(g.Time * 2) % 2 == 0) fb.TextCentered("PRESS ENTER", 170, 3, Ink);
+        if ((int)(g.Time * 2) % 2 == 0) fb.TextCentered("PRESS ENTER", 152, 3, Ink);
 
-        fb.TextCentered("ARROWS OR WASD  MOVE", 218, 2, Dim);
-        fb.TextCentered("UP OR X  ROTATE   Z  ROTATE BACK", 234, 2, Dim);
-        fb.TextCentered("SPACE  HARD DROP   C  HOLD", 250, 2, Dim);
-        fb.TextCentered("P  PAUSE   ESC  QUIT", 266, 2, Dim);
-        if (g.Best > 0) fb.TextCentered("BEST " + g.Best, 296, 2, Framebuffer.Hex(0xFFD93D));
-        fb.TextCentered("BUILT ON BRUTAL", 332, 2, Framebuffer.Hex(0x5B6288));
+        fb.TextCentered("ARROWS OR WASD  MOVE", 192, 2, Dim);
+        fb.TextCentered("UP OR X  ROTATE   Z  ROTATE BACK", 208, 2, Dim);
+        fb.TextCentered("SPACE  HARD DROP   C  HOLD", 224, 2, Dim);
+        fb.TextCentered("P  PAUSE   ESC  QUIT   F11  FULLSCREEN", 240, 2, Dim);
+        fb.TextCentered("LEFT RIGHT LEVEL   S SETTINGS   L SCORES   C CREDITS   M MUSIC", 258, 2, Framebuffer.Hex(0x5B6288));
+
+        var lv = TetrisGame.Levels[g.SelectedLevel];
+        fb.TextCentered("<  " + (g.SelectedLevel + 1) + "  " + lv.Name + "  >", 280, 2, Framebuffer.Hex(0xFFD93D));
+        if (g.Best > 0) fb.TextCentered("BEST " + g.Best, 300, 2, Framebuffer.Hex(0x5B6288));
+        fb.TextCentered("BUILT ON BRUTAL", 318, 2, Framebuffer.Hex(0x5B6288));
+    }
+
+    // ------------------------------------------------------------ campaign screens
+    void LevelClearScreen(Framebuffer fb, TetrisGame g)
+    {
+        fb.RectA(0, 0, Framebuffer.W, Framebuffer.H, Black, 175);
+        fb.TextCentered("LEVEL CLEAR", 84, 6, Framebuffer.Hex(0x4DFF9A));
+        fb.TextCentered("LEVEL " + g.Level + "  " + g.LevelName, 146, 3, Ink);
+        fb.TextCentered("GOAL " + g.TargetLines + " LINES CLEARED", 178, 2, Dim);
+        fb.TextCentered("SCORE " + g.Score, 204, 3, Framebuffer.Hex(0xFFD93D));
+        if (g.Level < TetrisGame.Levels.Length)
+            fb.TextCentered("NEXT  " + (g.Level + 1) + "  " + TetrisGame.Levels[g.Level].Name, 240, 2, Dim);
+
+        int secs = Math.Max(0, (int)MathF.Ceiling(g.LevelClearT));
+        fb.TextCentered("CONTINUING IN " + secs, 272, 2, Framebuffer.Hex(0x5B6288));
+        if ((int)(g.Time * 2) % 2 == 0) fb.TextCentered("ENTER TO CONTINUE", 300, 2, Dim);
+    }
+
+    void WonScreen(Framebuffer fb, TetrisGame g)
+    {
+        fb.RectA(0, 0, Framebuffer.W, Framebuffer.H, Black, 180);
+        fb.TextCentered("CAMPAIGN CLEAR", 92, 5, Framebuffer.Hex(0xFFD93D));
+        fb.TextCentered("ALL " + TetrisGame.Levels.Length + " LEVELS STACKED", 140, 2, Dim);
+        fb.TextCentered("FINAL SCORE " + g.Score, 176, 3, Ink);
+        fb.TextCentered("BEST " + g.Best, 208, 2, Framebuffer.Hex(0x5B6288));
+        if ((int)(g.Time * 2) % 2 == 0) fb.TextCentered("ENTER TO RETURN", 264, 2, Dim);
+    }
+
+    void CreditsScreen(Framebuffer fb, TetrisGame g)
+    {
+        fb.RectA(0, 0, Framebuffer.W, Framebuffer.H, Black, 250);
+        fb.TextCentered("NEON STACK", 44, 6, Ink);
+        fb.TextCentered("A NEON TETRIS CLONE BY AUDAX SOFTWORKS", 90, 2, Dim);
+
+        fb.TextCentered("BUILT WITH BRUTAL", 126, 3, Framebuffer.Hex(0x22E5FF));
+        fb.TextCentered("BRUTAL GAME DEVELOPMENT FRAMEWORK", 158, 2, Ink);
+        fb.TextCentered("COPYRIGHT C 2024 AHWOO LIMITED", 176, 2, Dim);
+        fb.TextCentered("LICENSED UNDER THE BRUTAL LICENSE V1.0", 192, 2, Dim);
+        fb.TextCentered("WWW.AHWOO.COM/BRUTAL", 208, 2, Framebuffer.Hex(0x5B6288));
+
+        fb.TextCentered("MUSIC AND SOUND SYNTHESISED AT RUNTIME", 244, 2, Dim);
+        fb.TextCentered(Audio.MusicEnabled ? "MUSIC ON  ( M )" : "MUSIC OFF  ( M )", 262, 2, Framebuffer.Hex(0x5B6288));
+        if ((int)(g.Time * 2) % 2 == 0) fb.TextCentered("ENTER TO RETURN", 306, 2, Dim);
+    }
+
+    // ------------------------------------------------------------ settings + scores
+    void SettingsScreen(Framebuffer fb, TetrisGame g)
+    {
+        Settings s = Settings.Current;
+        fb.RectA(0, 0, Framebuffer.W, Framebuffer.H, Black, 250);
+        fb.TextCentered("SETTINGS", 30, 5, Ink);
+
+        string[] labels = { "MUSIC VOLUME", "SFX VOLUME", "GHOST PIECE", "SCANLINES", "SCREEN SHAKE", "FULLSCREEN", "BACK" };
+        for (int i = 0; i < labels.Length; i++)
+        {
+            int y = 86 + i * 28;
+            bool sel = i == g.SettingsIndex;
+            uint c = sel ? Framebuffer.Hex(0xFFD93D) : Dim;
+
+            if (sel) fb.Text(">", 94, y, 2, c);
+            fb.Text(labels[i], 114, y, 2, c);
+
+            string val = i switch
+            {
+                0 => s.MusicVolume + "/10",
+                1 => s.SfxVolume + "/10",
+                2 => s.Ghost ? "ON" : "OFF",
+                3 => s.Scanlines ? "ON" : "OFF",
+                4 => s.Shake ? "ON" : "OFF",
+                5 => s.Fullscreen ? "ON" : "OFF",
+                _ => "",
+            };
+            if (val.Length > 0) fb.Text("< " + val + " >", 428, y, 2, c);
+        }
+
+        fb.TextCentered("UP DOWN SELECT   LEFT RIGHT CHANGE   ENTER BACK", 318, 2, Framebuffer.Hex(0x5B6288));
+    }
+
+    void LeaderboardScreen(Framebuffer fb, TetrisGame g)
+    {
+        fb.RectA(0, 0, Framebuffer.W, Framebuffer.H, Black, 250);
+        fb.TextCentered("LEADERBOARD", 24, 5, Ink);
+
+        var entries = Leaderboard.Entries;
+        fb.Text("RK  NAME       SCORE   LV  LN", 156, 72, 2, Framebuffer.Hex(0x5B6288));
+
+        if (entries.Count == 0)
+        {
+            fb.TextCentered("NO SCORES YET", 150, 2, Dim);
+        }
+        else
+        {
+            for (int i = 0; i < entries.Count; i++)
+            {
+                ScoreEntry e = entries[i];
+                bool isNew = i == g.NewRank;
+                uint c = isNew ? Framebuffer.Hex(0xFFD93D) : i == 0 ? Ink : Dim;
+                string line = $"{i + 1,2}  {e.Name}   {e.Score,7}   {e.Level,2}  {e.Lines,2}";
+                fb.Text(line, 156, 98 + i * 18, 2, c);
+            }
+        }
+
+        if ((int)(g.Time * 2) % 2 == 0) fb.TextCentered("ENTER TO RETURN", 328, 2, Dim);
+    }
+
+    void NameEntryScreen(Framebuffer fb, TetrisGame g)
+    {
+        fb.RectA(0, 0, Framebuffer.W, Framebuffer.H, Black, 190);
+        fb.TextCentered("NEW HIGH SCORE", 66, 5, Framebuffer.Hex(0xFFD93D));
+        fb.TextCentered("SCORE " + g.Score, 118, 3, Ink);
+        fb.TextCentered("ENTER YOUR INITIALS", 164, 2, Dim);
+
+        for (int i = 0; i < 3; i++)
+        {
+            bool sel = i == g.InitialIndex;
+            uint c = sel ? Framebuffer.Hex(0xFFD93D) : Ink;
+            int x = 250 + i * 60;
+            fb.Text(g.Initials[i].ToString(), x, 196, 7, c);
+            if (sel) fb.Rect(x, 238, 21, 3, c);
+        }
+
+        fb.TextCentered("UP DOWN  LETTER   LEFT RIGHT  MOVE", 274, 2, Dim);
+        fb.TextCentered("ENTER CONFIRM   ESC SKIP", 292, 2, Dim);
+    }
+
+    // ------------------------------------------------------------ startup sequence
+    public void RenderIntro(Framebuffer fb, Intro intro)
+    {
+        IntroBackground(fb, intro.T);
+        if (intro.Screen == IntroScreen.Audax) AudaxScreen(fb, intro.T);
+        else BrutalScreen(fb, intro.T);
+
+        int a = (int)((1f - intro.Fade) * 255f);
+        if (a > 0) fb.RectA(0, 0, Framebuffer.W, Framebuffer.H, Black, Math.Clamp(a, 0, 255));
+
+        // No scanlines over the BRUTAL ident: licence 2.2 requires the logo to be shown unaltered
+        // apart from scaling.
+        if (intro.Screen == IntroScreen.Audax) fb.Scanlines();
+    }
+
+    void IntroBackground(Framebuffer fb, float t)
+    {
+        uint top = Framebuffer.Hex(0x05060C), bot = Framebuffer.Hex(0x120A26);
+        for (int y = 0; y < Framebuffer.H; y++)
+            fb.FillRow(y, Framebuffer.Lerp(top, bot, y / (float)Framebuffer.H));
+
+        fb.Glow((int)(320 + Math.Cos(t * 0.7f) * 180), (int)(180 + Math.Sin(t * 0.9f) * 70), 200, Framebuffer.Hex(0x22E5FF), 26);
+        fb.Glow((int)(320 + Math.Cos(t * 0.5f + 2f) * 210), (int)(180 + Math.Sin(t * 0.6f + 1.5f) * 80), 180, Framebuffer.Hex(0xC65BFF), 24);
+
+        int off = (int)(t * 10) % 40;
+        for (int x = off; x < Framebuffer.W; x += 40) fb.RectA(x, 0, 1, Framebuffer.H, White, 5);
+        for (int y = off; y < Framebuffer.H; y += 40) fb.RectA(0, y, Framebuffer.W, 1, White, 5);
+    }
+
+    /// <summary>Audax Softworks ident: the generated logo asset, shown above "PRESENTS".</summary>
+    void AudaxScreen(Framebuffer fb, float t)
+    {
+        int w = 560;
+        int h = Math.Max(1, (int)MathF.Round(w * (float)AudaxLogo.H / AudaxLogo.W));
+        int x = (Framebuffer.W - w) / 2;
+        int y = 64;
+
+        fb.Glow(Framebuffer.W / 2, y + h / 2, 200, Framebuffer.Hex(0x22E5FF), 14);
+        fb.Blit(AudaxLogo, x, y, w, h);
+
+        fb.TextCentered("P R E S E N T S", y + h + 24, 2, Framebuffer.Hex(0x7C84A8));
+        if ((int)(t * 2) % 2 == 0) fb.TextCentered("ENTER", 330, 2, Framebuffer.Hex(0x3A4070));
+    }
+
+    /// <summary>Official BRUTAL logo, unaltered apart from uniform scaling (licence section 2.2).</summary>
+    void BrutalScreen(Framebuffer fb, float t)
+    {
+        int w = 560;
+        int h = Math.Max(1, (int)MathF.Round(w * (float)BrutalLogo.H / BrutalLogo.W));
+        int x = (Framebuffer.W - w) / 2;
+        int y = 92;
+
+        fb.Glow(Framebuffer.W / 2, y + h / 2, 210, White, 12);
+        fb.Blit(BrutalLogo, x, y, w, h);
+
+        fb.TextCentered("GAME DEVELOPMENT FRAMEWORK", 254, 2, Dim);
+        fb.TextCentered("BY AHWOO LIMITED", 276, 2, Framebuffer.Hex(0x5B6288));
+        if ((int)(t * 2) % 2 == 0) fb.TextCentered("ENTER", 330, 2, Framebuffer.Hex(0x3A4070));
     }
 }

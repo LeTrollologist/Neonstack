@@ -1,11 +1,17 @@
 namespace NeonStack;
 
-public enum Key { Left, Right, Down, Up, Z, X, C, Space, Enter, Escape, P, Count }
-public enum Phase { Title, Playing, Paused, Clearing, Over }
+public enum Key { Left, Right, Down, Up, Z, X, C, Space, Enter, Escape, P, M, S, L, Count }
+public enum Phase { Title, Playing, Paused, Clearing, LevelClear, Over, Won, Credits, Settings, Leaderboard, NameEntry }
 
 public sealed class Piece { public int Type, Rot, X, Y; }
 
+/// <summary>One campaign level: a name, a line goal and a fixed gravity interval.</summary>
+public readonly record struct LevelDef(string Name, int TargetLines, float Gravity);
+
 public struct Particle { public float X, Y, Vx, Vy, Life, Max; public uint Color; public int Size; }
+
+/// <summary>Floating score/combo text drawn over the board.</summary>
+public struct Popup { public string Text; public float X, Y, T, Life; public uint Color; }
 
 /// <summary>Engine-agnostic game logic: SRS rotation + kicks, 7-bag, hold, ghost, lock delay, DAS/ARR, guideline scoring.</summary>
 public sealed class TetrisGame
@@ -14,6 +20,22 @@ public sealed class TetrisGame
     public const int OriginX = 240, OriginY = 20, Cell = 16;   // board placement in framebuffer pixels
     public const float ClearDur = 0.32f;
     const float Das = 0.16f, Arr = 0.04f, LockDelay = 0.5f;
+    const float LevelClearDur = 3.2f;
+
+    /// <summary>The campaign. Each level is a line goal plus a fixed drop interval.</summary>
+    public static readonly LevelDef[] Levels =
+    {
+        new("NEON DAWN",   10, 0.85f),
+        new("STATIC BLOOM", 12, 0.72f),
+        new("CIRCUIT RAIN", 14, 0.62f),
+        new("VOLT RUSH",    16, 0.53f),
+        new("GRIDLOCK",     18, 0.45f),
+        new("CHROME FALL",  20, 0.38f),
+        new("AFTERGLOW",    22, 0.32f),
+        new("OVERCLOCK",    24, 0.27f),
+        new("BLACKOUT",     26, 0.22f),
+        new("FINAL STACK",  30, 0.17f),
+    };
 
     // I J L O S T Z
     static readonly string[][] Base =
@@ -75,13 +97,45 @@ public sealed class TetrisGame
     public Piece Cur = new();
     public int Hold = -1;
     public bool HoldUsed;
-    public int Score, Lines, Level = 1, Best, Combo;
+    public int Score, Lines, LevelLines, Best, Combo;
+
+    /// <summary>0-based campaign level.</summary>
+    public int LevelIndex;
+    public int Level => LevelIndex + 1;
+    public LevelDef LevelInfo => Levels[LevelIndex];
+    public int TargetLines => LevelInfo.TargetLines;
+    public string LevelName => LevelInfo.Name;
+
+    /// <summary>Highest level index the player has unlocked; the title screen can start any unlocked level.</summary>
+    public int Unlocked { get; private set; }
+    public int SelectedLevel { get; private set; }
+
     public Phase Phase = Phase.Title;
     public bool Quit;
-    public float Time, Shake, ClearT, MsgT;
+    public float Time, Shake, ClearT, MsgT, LevelClearT, Flash;
+    public uint FlashColor = 0xFFFFFFFF;
+    int scoreAtLevelStart;
     public string Msg = "";
     public readonly List<int> ClearRows = new();
     public readonly List<Particle> Particles = new();
+    public readonly List<Popup> Popups = new();
+
+    // Settings / leaderboard UI state (read by Scene).
+    public int SettingsIndex { get; private set; }
+    public const int SettingsRows = 7;
+    public string Initials { get; private set; } = "AAA";
+    public int InitialIndex { get; private set; }
+    public int NewRank { get; private set; } = -1;
+    float nameT;
+    bool fullscreenRequest;
+
+    /// <summary>Program consumes this to flip the actual window.</summary>
+    public bool ConsumeFullscreenRequest()
+    {
+        bool v = fullscreenRequest;
+        fullscreenRequest = false;
+        return v;
+    }
 
     readonly Queue<int> bag = new();
     readonly Random rng = new();
@@ -90,12 +144,22 @@ public sealed class TetrisGame
     float grav, lockT, dasT, arrT, overT;
     int lockResets, dasDir, lowY;
 
-    static string BestPath => Path.Combine(AppContext.BaseDirectory, "best.txt");
+    // Save data goes to a writable per-user folder, not next to the exe (which may be read-only).
+    static string BestPath => SaveData.File("best.txt");
+    static string ProgressPath => SaveData.File("progress.txt");
 
     public TetrisGame()
     {
         try { if (File.Exists(BestPath) && int.TryParse(File.ReadAllText(BestPath).Trim(), out int b)) Best = b; }
         catch { /* no persistence is fine */ }
+        try
+        {
+            if (File.Exists(ProgressPath) && int.TryParse(File.ReadAllText(ProgressPath).Trim(), out int u))
+                Unlocked = Math.Clamp(u, 0, Levels.Length - 1);
+        }
+        catch { /* no persistence is fine */ }
+
+        SelectedLevel = Unlocked;
         FillBag();
         for (int i = 0; i < 40; i++) EmitTitleDust();
     }
@@ -109,11 +173,7 @@ public sealed class TetrisGame
         return Cur.Y + d;
     }
 
-    public float GravityInterval()
-    {
-        float l = Math.Min(Level, 20) - 1;
-        return Math.Max(0.004f, (float)Math.Pow(0.8 - l * 0.007, l));
-    }
+    public float GravityInterval() => LevelInfo.Gravity;
 
     // ---------------------------------------------------------------- update
     bool Pr(Key k) => press[(int)k];
@@ -125,21 +185,52 @@ public sealed class TetrisGame
         for (int i = 0; i < prev.Length; i++) { press[i] = down[i] && !prev[i]; prev[i] = down[i]; }
         Shake = Math.Max(0f, Shake - dt * 30f);
         if (MsgT > 0) MsgT -= dt;
+        if (Flash > 0) Flash = Math.Max(0f, Flash - dt * 3.2f);
         UpdateParticles(dt);
+        UpdatePopups(dt);
 
         switch (Phase)
         {
             case Phase.Title:
-                if (Pr(Key.Enter) || Pr(Key.Space)) Start();
+                if (Pr(Key.Left)) { SelectedLevel = Math.Max(0, SelectedLevel - 1); }
+                if (Pr(Key.Right)) { SelectedLevel = Math.Min(Unlocked, SelectedLevel + 1); }
+                if (Pr(Key.Enter) || Pr(Key.Space)) { Audio.Play(Sfx.Start); StartCampaign(); }
+                if (Pr(Key.C)) { Audio.Play(Sfx.Menu); Phase = Phase.Credits; }
+                if (Pr(Key.S)) { Audio.Play(Sfx.Menu); SettingsIndex = 0; Phase = Phase.Settings; }
+                if (Pr(Key.L)) { Audio.Play(Sfx.Menu); NewRank = -1; Phase = Phase.Leaderboard; }
                 if (Pr(Key.Escape)) Quit = true;
                 break;
+            case Phase.Credits:
+                if (Pr(Key.Enter) || Pr(Key.Escape) || Pr(Key.C)) { Audio.Play(Sfx.Menu); Phase = Phase.Title; }
+                break;
+            case Phase.Settings:
+                UpdateSettings();
+                break;
+            case Phase.Leaderboard:
+                if (Pr(Key.Enter) || Pr(Key.Escape) || Pr(Key.L)) { Audio.Play(Sfx.Menu); NewRank = -1; Phase = Phase.Title; }
+                break;
+            case Phase.NameEntry:
+                UpdateNameEntry(dt);
+                break;
             case Phase.Paused:
-                if (Pr(Key.P) || Pr(Key.Escape) || Pr(Key.Enter)) Phase = Phase.Playing;
+                if (Pr(Key.P) || Pr(Key.Escape) || Pr(Key.Enter)) { Audio.Play(Sfx.Pause); Phase = Phase.Playing; }
                 break;
             case Phase.Over:
                 overT += dt;
-                if (overT > 0.6f && (Pr(Key.Enter) || Pr(Key.Space))) Start();
+                if (overT > 0.6f && (Pr(Key.Enter) || Pr(Key.Space)))
+                {
+                    Score = scoreAtLevelStart;
+                    StartLevel(LevelIndex);
+                }
                 if (Pr(Key.Escape)) Phase = Phase.Title;
+                break;
+            case Phase.LevelClear:
+                LevelClearT -= dt;
+                if (LevelClearT <= 0 || (LevelClearT < LevelClearDur - 0.7f && (Pr(Key.Enter) || Pr(Key.Space)))) AdvanceLevel();
+                break;
+            case Phase.Won:
+                overT += dt;
+                if (overT > 0.8f && (Pr(Key.Enter) || Pr(Key.Space) || Pr(Key.Escape))) Phase = Phase.Title;
                 break;
             case Phase.Clearing:
                 ClearT -= dt;
@@ -151,11 +242,89 @@ public sealed class TetrisGame
         }
     }
 
-    void Start()
+    void UpdateSettings()
+    {
+        Settings s = Settings.Current;
+        if (Pr(Key.Up)) { SettingsIndex = (SettingsIndex + SettingsRows - 1) % SettingsRows; Audio.Play(Sfx.Move); }
+        if (Pr(Key.Down)) { SettingsIndex = (SettingsIndex + 1) % SettingsRows; Audio.Play(Sfx.Move); }
+
+        int dir = Pr(Key.Left) ? -1 : Pr(Key.Right) ? 1 : 0;
+        if (dir != 0)
+        {
+            switch (SettingsIndex)
+            {
+                case 0: s.MusicVolume = Math.Clamp(s.MusicVolume + dir, 0, 10); break;
+                case 1: s.SfxVolume = Math.Clamp(s.SfxVolume + dir, 0, 10); Audio.Play(Sfx.Move); break;
+                case 2: s.Ghost = !s.Ghost; Audio.Play(Sfx.Menu); break;
+                case 3: s.Scanlines = !s.Scanlines; Audio.Play(Sfx.Menu); break;
+                case 4: s.Shake = !s.Shake; Audio.Play(Sfx.Menu); break;
+                case 5: s.Fullscreen = !s.Fullscreen; fullscreenRequest = true; Audio.Play(Sfx.Menu); break;
+                case 6: Phase = Phase.Title; Audio.Play(Sfx.Menu); break;
+            }
+            s.Save();
+        }
+
+        if (Pr(Key.Enter) || Pr(Key.Escape) || Pr(Key.S)) { Audio.Play(Sfx.Menu); Phase = Phase.Title; }
+    }
+
+    void UpdateNameEntry(float dt)
+    {
+        nameT += dt;
+        if (nameT < 0.45f) return;
+
+        if (Pr(Key.Left)) { InitialIndex = (InitialIndex + 2) % 3; Audio.Play(Sfx.Move); }
+        if (Pr(Key.Right)) { InitialIndex = (InitialIndex + 1) % 3; Audio.Play(Sfx.Move); }
+        if (Pr(Key.Up)) { CycleLetter(1); Audio.Play(Sfx.Rotate); }
+        if (Pr(Key.Down)) { CycleLetter(-1); Audio.Play(Sfx.Rotate); }
+
+        if (Pr(Key.Enter) || Pr(Key.Space))
+        {
+            NewRank = Leaderboard.Add(Initials, Score, Level, Lines);
+            Audio.Play(Sfx.Start);
+            Phase = Phase.Leaderboard;
+        }
+        else if (Pr(Key.Escape))
+        {
+            Phase = Phase.Over;
+        }
+    }
+
+    void CycleLetter(int delta)
+    {
+        char[] c = Initials.ToCharArray();
+        int v = c[InitialIndex] - 'A';
+        v = (v + delta + 26) % 26;
+        c[InitialIndex] = (char)('A' + v);
+        Initials = new string(c);
+    }
+
+    void UpdatePopups(float dt)
+    {
+        for (int i = Popups.Count - 1; i >= 0; i--)
+        {
+            var p = Popups[i];
+            p.T += dt;
+            p.Y -= 20f * dt;
+            if (p.T >= p.Life) Popups.RemoveAt(i);
+            else Popups[i] = p;
+        }
+    }
+
+    void StartCampaign()
+    {
+        Score = 0;
+        Lines = 0;
+        Combo = 0;
+        StartLevel(SelectedLevel);
+    }
+
+    /// <summary>Resets the board and begins the level, keeping the score earned in earlier levels.</summary>
+    void StartLevel(int index)
     {
         Array.Clear(Board);
-        Score = Lines = Combo = 0;
-        Level = 1;
+        LevelIndex = Math.Clamp(index, 0, Levels.Length - 1);
+        LevelLines = 0;
+        Combo = 0;
         Hold = -1;
         HoldUsed = false;
         bag.Clear();
@@ -163,20 +332,40 @@ public sealed class TetrisGame
         Particles.Clear();
         ClearRows.Clear();
         dasDir = 0; dasT = arrT = 0;
-        MsgT = 0;
+        scoreAtLevelStart = Score;
+        Msg = "LEVEL " + Level + "  " + LevelName;
+        MsgT = 1.6f;
         Phase = Phase.Playing;
         Spawn(NextType());
     }
 
+    void AdvanceLevel()
+    {
+        int next = LevelIndex + 1;
+        if (next >= Levels.Length)
+        {
+            Phase = Phase.Won;
+            overT = 0;
+            SaveBest();
+            Audio.Play(Sfx.Win);
+            return;
+        }
+
+        Unlocked = Math.Max(Unlocked, next);
+        SelectedLevel = Math.Max(SelectedLevel, next);
+        SaveProgress();
+        StartLevel(next);
+    }
+
     void Play(float dt, bool[] down)
     {
-        if (Pr(Key.P) || Pr(Key.Escape)) { Phase = Phase.Paused; return; }
+        if (Pr(Key.P) || Pr(Key.Escape)) { Audio.Play(Sfx.Pause); Phase = Phase.Paused; return; }
 
         int dir = down[(int)Key.Left] == down[(int)Key.Right] ? 0 : (down[(int)Key.Left] ? -1 : 1);
         if (dir != dasDir)
         {
             dasDir = dir; dasT = 0; arrT = 0;
-            if (dir != 0) Move(dir);
+            if (dir != 0 && Move(dir)) Audio.Play(Sfx.Move);
         }
         else if (dir != 0)
         {
@@ -253,6 +442,7 @@ public sealed class TetrisGame
             {
                 Cur.Rot = nr; Cur.X += k.x; Cur.Y -= k.y;
                 AfterMove();
+                Audio.Play(Sfx.Rotate);
                 return;
             }
         }
@@ -265,6 +455,7 @@ public sealed class TetrisGame
         int t = Cur.Type;
         if (Hold < 0) { Hold = t; Spawn(NextType()); }
         else { int h = Hold; Hold = t; Spawn(h); }
+        Audio.Play(Sfx.Hold);
     }
 
     void HardDrop()
@@ -279,11 +470,13 @@ public sealed class TetrisGame
             for (int i = 0; i < Math.Min(d, 12); i++) Emit(px + Rnd(-6, 6), py - i * Cell * 0.8f, col, 1, 25f, 2, 0.35f);
         }
         Shake = Math.Max(Shake, 4f);
-        Lock();
+        Audio.Play(Sfx.HardDrop);
+        Lock(silent: true);
     }
 
-    void Lock()
+    void Lock(bool silent = false)
     {
+        if (!silent) Audio.Play(Sfx.Lock);
         uint col = Framebuffer.Hex(Palette[Cur.Type]);
         bool lockedOut = false;
         foreach (var c in Shapes[Cur.Type][Cur.Rot])
@@ -311,10 +504,16 @@ public sealed class TetrisGame
         Combo++;
         Score += new[] { 0, 100, 300, 500, 800 }[n] * Level;
         if (Combo > 1) Score += 50 * (Combo - 1) * Level;
-        Msg = n switch { 1 => "SINGLE", 2 => "DOUBLE", 3 => "TRIPLE", _ => "TETRIS" };
-        if (Combo > 1 && n < 4) Msg += " X" + Combo;
-        MsgT = 1.2f;
+        string label = n switch { 1 => "SINGLE", 2 => "DOUBLE", 3 => "TRIPLE", _ => "TETRIS" };
+        Msg = "";
+        MsgT = 0f;
         Shake = Math.Max(Shake, n * 2.5f);
+        Audio.Play(n switch { 1 => Sfx.Clear1, 2 => Sfx.Clear2, 3 => Sfx.Clear3, _ => Sfx.Clear4 });
+        Flash = 0.6f;
+        FlashColor = n >= 4 ? Framebuffer.Hex(0xFFD93D) : Framebuffer.Hex(0x22E5FF);
+        Popups.Add(new Popup { Text = label, X = 320, Y = 118, T = 0f, Life = 1.0f, Color = FlashColor });
+        if (Combo > 1)
+            Popups.Add(new Popup { Text = "COMBO " + Combo, X = 320, Y = 148, T = 0f, Life = 1.1f, Color = Framebuffer.Hex(0xC65BFF) });
         foreach (int y in ClearRows)
             for (int x = 0; x < Cols; x++)
                 Emit(OriginX + x * Cell + Cell / 2, OriginY + y * Cell + Cell / 2, Framebuffer.Hex(Palette[Board[x, y] - 1]), n >= 4 ? 4 : 2, 120f, 3, 0.8f);
@@ -334,9 +533,26 @@ public sealed class TetrisGame
         for (int y = write; y >= 0; y--) for (int x = 0; x < Cols; x++) Board[x, y] = 0;
 
         Lines += ClearRows.Count;
+        LevelLines += ClearRows.Count;
         ClearRows.Clear();
-        int nl = 1 + Lines / 10;
-        if (nl > Level) { Level = nl; Msg = "LEVEL " + Level; MsgT = 1.5f; }
+
+        if (LevelLines >= TargetLines)
+        {
+            Score += 500 * Level;
+            SaveBest();
+
+            // Record the unlock immediately so quitting on the Level Clear screen still counts.
+            Unlocked = Math.Max(Unlocked, Math.Min(LevelIndex + 1, Levels.Length - 1));
+            SaveProgress();
+
+            Audio.Play(Sfx.LevelUp);
+            Flash = 0.9f;
+            FlashColor = Framebuffer.Hex(0x4DFF9A);
+            LevelClearT = LevelClearDur;
+            Phase = Phase.LevelClear;
+            return;
+        }
+
         Phase = Phase.Playing;
         Spawn(NextType());
     }
@@ -353,15 +569,33 @@ public sealed class TetrisGame
         Phase = Phase.Over;
         overT = 0;
         Shake = 8f;
-        if (Score > Best)
+        SaveBest();
+        Audio.Play(Sfx.GameOver);
+
+        if (Leaderboard.Qualifies(Score))
         {
-            Best = Score;
-            try { File.WriteAllText(BestPath, Best.ToString()); } catch { /* ignore */ }
+            Phase = Phase.NameEntry;
+            nameT = 0f;
+            Initials = "AAA";
+            InitialIndex = 0;
         }
+
         for (int y = 0; y < Rows; y++)
             for (int x = 0; x < Cols; x++)
                 if (Board[x, y] != 0)
                     Emit(OriginX + x * Cell + Cell / 2, OriginY + y * Cell + Cell / 2, Framebuffer.Hex(Palette[Board[x, y] - 1]), 1, 90f, 2, 1.2f);
+    }
+
+    void SaveBest()
+    {
+        if (Score <= Best) return;
+        Best = Score;
+        try { File.WriteAllText(BestPath, Best.ToString()); } catch { /* read-only install: fine */ }
+    }
+
+    void SaveProgress()
+    {
+        try { File.WriteAllText(ProgressPath, Unlocked.ToString()); } catch { /* read-only install: fine */ }
     }
 
     // ---------------------------------------------------------------- bag
