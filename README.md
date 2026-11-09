@@ -4,14 +4,14 @@
 
 ### *Neon, CRT-scanlined Tetris on the BRUTAL framework*
 
-**SRS + Kicks &bull; Ten Levels &bull; Chiptune + SFX &bull; Local Leaderboard**
+**SRS + Kicks &bull; T-Spins &amp; B2B &bull; Ten Levels &bull; Chiptune + SFX &bull; Local Leaderboard**
 
 <br />
 
 <!-- Tier 1: project metadata -->
 <p align="center">
   <a href="https://github.com/LeTrollologist/Neonstack/releases/latest">
-    <img src="https://img.shields.io/badge/Release-v1.0.0-6366F1?style=for-the-badge&logo=github&logoColor=white&labelColor=0f172a" alt="Release" />
+    <img src="https://img.shields.io/badge/Release-v1.1.0-6366F1?style=for-the-badge&logo=github&logoColor=white&labelColor=0f172a" alt="Release" />
   </a>
   <a href="https://www.ahwoo.com/brutal">
     <img src="https://img.shields.io/badge/Built_with-BRUTAL-8B5CF6?style=for-the-badge&logo=dotnet&logoColor=white&labelColor=0f172a" alt="Built with BRUTAL" />
@@ -75,12 +75,29 @@ framework. It ships as a self-contained game for Windows and Linux, with a ten-l
 guideline-style rule set, synthesised music and a local high-score table.
 
 - **SRS rotation + kicks**, 7-bag randomiser, hold, ghost piece, lock delay, DAS/ARR.
-- **Ten-level campaign** with line goals, unlocks, level-clear and victory screens.
+- **T-spins and back-to-back** — full three-corner detection, mini/full scoring, 1.5x chains.
+- **Ten-level campaign** with line goals, unlocks, level-clear and victory screens, and a neon
+  accent colour per level.
 - **640×360 pixel art** rendered at an integer multiple of the window (1×–6×) and blitted 1:1.
 - **Fullscreen by default**, F11 to toggle, resizable window at any size.
-- **Procedural audio**: a 15-second chiptune loop and fifteen sound effects, mixed live.
+- **Procedural audio**: a 15-second chiptune loop and fifteen sound effects, mixed live, ducked while paused.
 - **Settings and a local top-10 leaderboard**, both persisted per user.
 - **BRUTAL licence compliant**: official logo before gameplay, credits screen, `NOTICE.txt` shipped.
+- **In-repo test harness**: 30 headless tests over the rules, scoring, persistence and every screen.
+
+### New in v1.1.0
+
+- **Game logo** — a generated `NEON STACK` lockup now opens the title screen, and the same mark is
+  the window/taskbar icon (closes [#5](https://github.com/LeTrollologist/Neonstack/issues/5)).
+- **T-spin detection** — full and mini T-spins, `T-SPIN` popups, and the guideline scores.
+- **Back-to-back scoring** — consecutive tetrises and T-spin clears pay 1.5x, with a `B2B CHAIN`
+  indicator in the HUD.
+- **Level themes** — every stage tints the board frame, grid glow and background with its own accent.
+- **Pause ducking** — the music drops to 30% while paused and ramps back without a click.
+- **Fixes** — the Enter that skips the intro no longer starts a game, `BACK` in settings ignores
+  Left/Right, and the game-over screen states both of its exit keys.
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the full list.
 
 ## Download
 
@@ -88,8 +105,8 @@ Grab the latest build from the [Releases](https://github.com/LeTrollologist/Neon
 
 | Build | Asset | Requirements |
 | --- | --- | --- |
-| Windows x64 | `NeonStack-v1.0.0-win-x64.zip` | Windows 10/11, an OpenGL driver |
-| Linux x64 | `NeonStack-v1.0.0-linux-x64.zip` | glibc-based distro, an OpenGL driver |
+| Windows x64 | `NeonStack-v1.1.0-win-x64.zip` | Windows 10/11, an OpenGL driver |
+| Linux x64 | `NeonStack-v1.1.0-linux-x64.zip` | glibc-based distro, an OpenGL driver |
 
 Both packages are **self-contained**: unzip, then run `NeonStack.exe` (Windows) or `./NeonStack`
 (Linux). No .NET install is required. Save data goes to the per-user folder, not the game folder.
@@ -104,6 +121,11 @@ dotnet run -c Release
 Needs the **.NET 10 SDK** and a desktop OpenGL driver. The project has no third-party runtime
 dependencies beyond the BRUTAL packages (pinned in `NeonStack.csproj`).
 
+```
+dotnet run --project tests/NeonStack.Tests -c Release     # the headless test suite
+dotnet build -c Release                                   # game only
+```
+
 | Flag | Effect |
 | --- | --- |
 | `--fullscreen` | Force fullscreen on launch (also the default) |
@@ -112,6 +134,18 @@ dependencies beyond the BRUTAL packages (pinned in `NeonStack.csproj`).
 | `--dump-music=FILE` | Write the generated soundtrack to a WAV and exit |
 
 The initial window mode can also be changed in Settings, which is persisted.
+
+## Release Builds
+
+The self-contained archives are produced with the pinned SDK; no extra tooling is involved:
+
+```
+dotnet publish -c Release -r win-x64   --self-contained -o out/win-x64
+dotnet publish -c Release -r linux-x64 --self-contained -o out/linux-x64
+```
+
+Zip each output folder, keep `NOTICE.txt` alongside the executable (the csproj copies it), and
+attach both archives to the GitHub release.
 
 ---
 
@@ -153,6 +187,33 @@ campaign victory screen. Progress is remembered, and the title screen can start 
 | 9 | BLACKOUT | 26 | 0.22 s |
 | 10 | FINAL STACK | 30 | 0.17 s |
 
+Each level also carries a neon accent colour that tints its board frame, grid glow and background.
+
+<p align="center">
+  <img src="docs/gameplay.png" alt="T-spin double with a back-to-back bonus" width="820" />
+</p>
+
+## Scoring
+
+Guideline values, multiplied by the current level. Hard drops pay 2 per cell and soft drops 1.
+
+| Clear | Base (× level) |
+| --- | --- |
+| Single / Double / Triple / Tetris | 100 / 300 / 500 / 800 |
+| T-spin single / double / triple | 800 / 1200 / 1600 |
+| Mini T-spin single / double | 200 / 400 |
+| T-spin with no lines | 400 |
+| Combo | +50 × combo step × level |
+
+A **T-spin** uses the three-corner rule: the piece must be a T, its last successful movement must
+have been a rotation, and three of the four corners of its 3×3 box must be blocked. If the two
+corners in front of the nub are not both blocked the spin is a **mini**, unless the rotation needed
+the last (fifth) SRS kick test.
+
+Consecutive *difficult* clears — tetrises and T-spin clears — trigger **back-to-back**: the second
+and later clears of a chain pay 1.5×. A line-less T-spin keeps the chain alive, any other clear
+breaks it, and clearing a level's line goal adds a 500 × level bonus.
+
 ## Resolution and Scaling
 
 The game is authored in a fixed 640×360 logical space. The framebuffer is rendered at the largest
@@ -172,7 +233,8 @@ effects together through winmm `waveOut` on Windows, or a raw PCM pipe (`pw-cat`
 
 The loop is DC-blocked, low-end controlled and faded in over the first 0.8 seconds; the mixer streams
 through eight 512-sample buffers (~93 ms of cushion) from an above-normal-priority thread. M toggles
-music; both volumes live in Settings. `--dump-music=track.wav` writes the generated loop.
+music; both volumes live in Settings. While paused the music ducks to 30% and ramps back up, so the
+pause screen is not scored by the loop. `--dump-music=track.wav` writes the generated loop.
 
 Effects include move/rotate blips, lock and hard-drop impacts, escalating line-clear arpeggios, a
 level-up fanfare, game-over/win stingers and menu feedback, plus visual line-clear flash, floating
@@ -219,18 +281,20 @@ game falls back to the executable folder and keeps running.
 ## Layout
 
 - `TetrisGame.cs` — rules: SRS + kicks, 7-bag, hold, ghost, lock delay (15 resets), DAS/ARR,
-  guideline scoring, combos, campaign progression, effects, settings/leaderboard UI state
+  guideline scoring with T-spins and back-to-back, campaign progression, effects, settings and
+  leaderboard UI state
 - `Framebuffer.cs` — 640×360 logical software rasteriser with integer render scale, additive glow,
   scanlines, 3×5 font and an RGBA blitter
 - `Scene.cs` — all drawing: board, HUD, splash screens, settings, leaderboard, credits
 - `ImageData.cs` — minimal PNG decoder for the embedded logos
 - `Intro.cs` — startup sequence state machine
-- `Audio.cs` — chiptune/SFX synthesis, software mixer and platform output
+- `Audio.cs` — chiptune/SFX synthesis, software mixer (with pause ducking) and platform output
 - `Settings.cs`, `Leaderboard.cs`, `SaveData.cs` — persisted options, scores and the save folder
-- `BrutalHost.cs` — the only BRUTAL-touching file: window, input, scaling, GL blit
+- `BrutalHost.cs` — the only BRUTAL-touching file: window, icon, input, scaling, GL blit
 - `Assets/logo_brutal_wht.png` — official BRUTAL logo (licence 2.2)
-- `Assets/logo_audax.png` — generated Audax Softworks logo
-- `tools/logo-gen` — the generator that produced `logo_audax.png`
+- `Assets/logo_audax.png`, `Assets/logo_neonstack.png`, `Assets/icon_neonstack.png` — generated art
+- `tools/logo-gen` — generates the Audax splash, the NEON STACK lockup and the window icon
+- `tests/NeonStack.Tests` — headless test harness (rules, scoring, persistence, rendering)
 
 ## BRUTAL Licence
 
@@ -253,17 +317,22 @@ The game itself is MIT licensed — see [`LICENSE`](LICENSE), which also lists t
 ## Quality Checks
 
 - `dotnet build -c Release` — **0 warnings, 0 errors**.
-- Campaign harness — level clear, unlock, final level and victory path: **PASS**.
-- Leaderboard harness — qualifying game over, initials entry, save/rank: **PASS**.
-- Audio — winmm `waveOut`, 86 blocks/s, 0 write errors, Windows endpoint meter reads ~0.22 peak
-  in-game (0.000 before launch/after exit).
-- Rendering — 1×, 2×, 3×, forced `--scale` and fullscreen verified.
+- `dotnet run --project tests/NeonStack.Tests -c Release` — **30/30 pass**: SRS kicks, 7-bag,
+  hard/soft drop points, T-spin (full, mini, zero, rejected two-corner), back-to-back, combo,
+  campaign unlock and victory, hold, ghost, pause, input suppression, leaderboard, settings,
+  PNG decoding, framebuffer clipping and a render smoke test for every screen.
+- Rendering — all screens re-rendered headlessly at 2× and reviewed: title, gameplay, paused,
+  clearing, level clear, game over, victory, settings, leaderboard, name entry, credits, and both
+  startup splashes.
+- Audio — winmm `waveOut` path unchanged from 1.0.0; pause ducking ramps inside the mixer, so no
+  click and no change to the block timing.
+- Licence — the official BRUTAL logo still shows unaltered, before gameplay, and `NOTICE.txt` is
+  still copied next to the executable.
 
 ## Still To Do
 
-- T-spin detection and back-to-back scoring.
 - Online scores (the leaderboard is local only).
-- In-repo automated tests (the harness lives outside this repository).
-- Volume ducking during pause, and more level variety.
+- Gamepad input (BRUTAL's GLFW binding already exposes the gamepad API).
+- A statistics/replay screen, and more level variety than colour themes.
 
 
