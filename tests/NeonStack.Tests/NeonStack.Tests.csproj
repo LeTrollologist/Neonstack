@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>NeonStack.Tests</AssemblyName>
+    <RootNamespace>NeonStack.Tests</RootNamespace>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The harness drives the real game assembly; no test framework packages are needed. -->
+    <ProjectReference Include="..\..\NeonStack.csproj" />
+  </ItemGroup>
+
+</Project>

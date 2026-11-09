@@ -29,6 +29,10 @@ Settings.Reload();
 // Fullscreen by default; --windowed overrides it for a session.
 using var host = new BrutalHost("NEON STACK", Framebuffer.W, Framebuffer.H, fullscreen ?? Settings.Current.Fullscreen, forcedScale);
 
+// The taskbar/window icon is the generated NEON STACK mark. Missing the asset must not stop the game.
+try { host.SetWindowIcon(ImageData.LoadEmbedded("NeonStack.Assets.icon_neonstack.png")); }
+catch (Exception e) { Console.Error.WriteLine("Window icon unavailable: " + e.Message); }
+
 Audio.Start();
 
 var intro = new Intro();
@@ -54,7 +58,10 @@ while (host.Running && !game.Quit)
     int scale = host.RenderScale;
     if (scale != fb.Scale) fb = new Framebuffer(scale);
 
-    if (intro.Active) intro.Update(dt, down);
+    // Track the intro state before it updates: the frame that closes the last splash must not let
+    // the same Enter/Space press fall through to the title screen.
+    bool introWasActive = intro.Active;
+    if (introWasActive) intro.Update(dt, down);
 
     if (intro.Active)
     {
@@ -62,11 +69,13 @@ while (host.Running && !game.Quit)
     }
     else
     {
+        if (introWasActive) game.SuppressConfirm(0.35f);
         game.Update(dt, down);
         if (game.ConsumeFullscreenRequest()) host.ToggleFullscreen();
         scene.Render(fb, game);
     }
 
+    Audio.SetDuck(game.Phase == Phase.Paused);
     host.Present(fb);
 
     if (dt < 0.004f) Thread.Sleep(1); // don't spin if vsync is off

@@ -8,9 +8,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>NeonStack</RootNamespace>
     <AssemblyName>NeonStack</AssemblyName>
-    <Version>1.0.0</Version>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
+    <Version>1.1.0</Version>
+    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <FileVersion>1.1.0.0</FileVersion>
     <Product>NEON STACK</Product>
     <Company>Audax Softworks</Company>
     <Authors>Audax Softworks</Authors>
@@ -25,10 +25,14 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- tools/ contains the standalone logo generator, not part of the game assembly. -->
+    <!-- tools/ holds the standalone logo generator and tests/ the headless test harness; neither is
+         part of the game assembly. -->
     <Compile Remove="tools\**" />
     <None Remove="tools\**" />
     <EmbeddedResource Remove="tools\**" />
+    <Compile Remove="tests\**" />
+    <None Remove="tests\**" />
+    <EmbeddedResource Remove="tests\**" />
   </ItemGroup>
 
   <ItemGroup>
@@ -38,6 +42,9 @@
     <EmbeddedResource Include="Assets\logo_brutal_wht.png" LogicalName="NeonStack.Assets.logo_brutal_wht.png" />
     <!-- Generated Audax Softworks logo, shown on the first splash screen. -->
     <EmbeddedResource Include="Assets\logo_audax.png" LogicalName="NeonStack.Assets.logo_audax.png" />
+    <!-- Generated NEON STACK title lockup and window icon. -->
+    <EmbeddedResource Include="Assets\logo_neonstack.png" LogicalName="NeonStack.Assets.logo_neonstack.png" />
+    <EmbeddedResource Include="Assets\icon_neonstack.png" LogicalName="NeonStack.Assets.icon_neonstack.png" />
     <None Update="LICENSE" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

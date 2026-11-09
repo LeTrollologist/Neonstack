@@ -37,6 +37,8 @@ public static unsafe class Audio
     static bool running;
     static Thread? thread;
     static bool prevM;
+    static float duck = 1f;             // current music level (0..1), smoothed in the mixer
+    static float duckTarget = 1f;
 
     struct Voice
     {
@@ -93,6 +95,12 @@ public static unsafe class Audio
         }
     }
 
+    /// <summary>
+    /// Ducks the music (to ~30%) while the game is paused. Effects stay at full level so menu
+    /// feedback still reads. The mixer ramps towards the target, so there is no click.
+    /// </summary>
+    public static void SetDuck(bool on) => duckTarget = on ? 0.3f : 1f;
+
     public static void Dispose()
     {
         running = false;
@@ -122,7 +130,8 @@ public static unsafe class Audio
     {
         Array.Clear(mix);
 
-        float musicVol = MusicEnabled ? Settings.Current.MusicVolume / 10f : 0f;
+        duck += (duckTarget - duck) * 0.12f;
+        float musicVol = MusicEnabled ? Settings.Current.MusicVolume / 10f * duck : 0f;
         float sfxVol = Settings.Current.SfxVolume / 10f;
 
         lock (gate)

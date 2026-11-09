@@ -9,6 +9,21 @@ public static class SaveData
 
     static string Resolve()
     {
+        // Tests (and portable runs) can point the save files at a scratch folder.
+        string? overridden = Environment.GetEnvironmentVariable("NEONSTACK_SAVEDIR");
+        if (!string.IsNullOrWhiteSpace(overridden))
+        {
+            try
+            {
+                Directory.CreateDirectory(overridden);
+                return overridden;
+            }
+            catch
+            {
+                // Fall through to the normal per-user folder.
+            }
+        }
+
         try
         {
             string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NeonStack");

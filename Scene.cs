@@ -8,11 +8,20 @@ public sealed class Scene
     static readonly uint Dim = Framebuffer.Hex(0x7C84A8);
     static readonly uint Ink = Framebuffer.Hex(0xEEF1FF);
 
-    // Official BRUTAL logo (white on transparent) and the generated Audax Softworks logo.
+    // Official BRUTAL logo (white on transparent), the generated Audax Softworks logo and the
+    // generated NEON STACK title lockup.
     static readonly ImageData BrutalLogo = ImageData.LoadEmbedded("NeonStack.Assets.logo_brutal_wht.png");
     static readonly ImageData AudaxLogo = ImageData.LoadEmbedded("NeonStack.Assets.logo_audax.png");
+    static readonly ImageData TitleLogo = ImageData.LoadEmbedded("NeonStack.Assets.logo_neonstack.png");
 
     static uint Col(int type) => Framebuffer.Hex(TetrisGame.Palette[type]);
+
+    /// <summary>Per-level accent from the campaign table; the title screen previews the selected level.</summary>
+    static uint Accent(TetrisGame g)
+    {
+        int index = g.Phase == Phase.Title ? g.SelectedLevel : g.LevelIndex;
+        return Framebuffer.Hex(TetrisGame.Levels[index].Accent);
+    }
 
     public void Render(Framebuffer fb, TetrisGame g)
     {
@@ -61,7 +70,7 @@ public sealed class Scene
                 fb.TextCentered("LEVEL " + g.Level + "  " + g.LevelName, 160, 2, Dim);
                 fb.TextCentered("SCORE " + g.Score, 184, 3, Ink);
                 if (g.Score > 0 && g.Score >= g.Best) fb.TextCentered("NEW BEST", 212, 2, Framebuffer.Hex(0xFFD93D));
-                if ((int)(g.Time * 2) % 2 == 0) fb.TextCentered("ENTER TO RETRY LEVEL", 254, 2, Dim);
+                if ((int)(g.Time * 2) % 2 == 0) fb.TextCentered("ENTER TO RETRY LEVEL   ESC FOR TITLE", 254, 2, Dim);
                 break;
             case Phase.Won: WonScreen(fb, g); break;
             case Phase.Credits: CreditsScreen(fb, g); break;
@@ -77,13 +86,15 @@ public sealed class Scene
     // ------------------------------------------------------------ background
     void Background(Framebuffer fb, TetrisGame g)
     {
-        uint top = Framebuffer.Hex(0x0A0B14), bot = Framebuffer.Hex(0x1A1033);
+        uint accent = Accent(g);
+        uint top = Framebuffer.Lerp(Framebuffer.Hex(0x0A0B14), accent, 0.05f);
+        uint bot = Framebuffer.Lerp(Framebuffer.Hex(0x1A1033), accent, 0.10f);
         for (int y = 0; y < Framebuffer.H; y++)
             fb.FillRow(y, Framebuffer.Lerp(top, bot, y / (float)Framebuffer.H));
 
         float t = g.Time * 0.25f;
         int lv = g.Level;
-        fb.Glow((int)(320 + Math.Cos(t) * 230), (int)(180 + Math.Sin(t * 1.3f) * 90), 190, Col((lv + 0) % 7), 38);
+        fb.Glow((int)(320 + Math.Cos(t) * 230), (int)(180 + Math.Sin(t * 1.3f) * 90), 190, accent, 40);
         fb.Glow((int)(320 + Math.Cos(t * 0.8f + 2f) * 250), (int)(180 + Math.Sin(t + 1f) * 110), 170, Col((lv + 2) % 7), 34);
         fb.Glow((int)(320 + Math.Cos(t * 1.1f + 4f) * 200), (int)(180 + Math.Sin(t * 0.7f + 3f) * 100), 150, Col((lv + 4) % 7), 30);
 
@@ -97,11 +108,12 @@ public sealed class Scene
     void Board(Framebuffer fb, TetrisGame g, int bx, int by)
     {
         int bw = TetrisGame.Cols * C, bh = TetrisGame.Rows * C;
-        fb.RectA(bx - 6, by - 6, bw + 12, bh + 12, Framebuffer.Hex(0x22E5FF), 22);
+        uint accent = Accent(g);
+        fb.RectA(bx - 6, by - 6, bw + 12, bh + 12, accent, 22);
         fb.RectA(bx - 3, by - 3, bw + 6, bh + 6, Black, 215);
         for (int i = 1; i < TetrisGame.Cols; i++) fb.RectA(bx + i * C, by, 1, bh, White, 9);
         for (int j = 1; j < TetrisGame.Rows; j++) fb.RectA(bx, by + j * C, bw, 1, White, 9);
-        uint edge = Framebuffer.Hex(0x22E5FF);
+        uint edge = accent;
         fb.RectA(bx - 3, by - 3, bw + 6, 1, edge, 200);
         fb.RectA(bx - 3, by + bh + 2, bw + 6, 1, edge, 200);
         fb.RectA(bx - 3, by - 3, 1, bh + 6, edge, 200);
@@ -167,10 +179,11 @@ public sealed class Scene
         if (g.Hold >= 0) Mini(fb, g.Hold, 60, 44, 104, 64, 12, g.HoldUsed ? 70 : 255);
 
         Stat(fb, "SCORE", g.Score.ToString(), 60, 130, Ink);
+        if (g.BackToBack) fb.Text("B2B CHAIN", 60, 112, 2, Framebuffer.Hex(0xFF9A3C));
         Stat(fb, "BEST", g.Best.ToString(), 60, 180, Dim);
         Stat(fb, "LEVEL", g.Level + "/" + TetrisGame.Levels.Length, 60, 226, Ink);
         Stat(fb, "GOAL", g.LevelLines + "/" + g.TargetLines, 60, 276, Ink);
-        fb.Text(g.LevelName, 60, 334, 2, Framebuffer.Hex(0x5B6288));
+        fb.Text(g.LevelName, 60, 334, 2, Accent(g));
 
         fb.Text("NEXT", 440, 24, 2, Dim);
         for (int i = 0; i < 3; i++)
@@ -209,17 +222,14 @@ public sealed class Scene
     void Title(Framebuffer fb, TetrisGame g)
     {
         fb.RectA(0, 0, Framebuffer.W, Framebuffer.H, Black, 170);
-        const string name = "NEON STACK";
-        int scale = 8;
-        int x = (Framebuffer.W - Framebuffer.TextWidth(name, scale)) / 2;
-        for (int i = 0; i < name.Length; i++)
-        {
-            int bob = (int)(Math.Sin(g.Time * 3f + i * 0.6f) * 3);
-            uint c = Col(i % 7);
-            fb.Text(name[i].ToString(), x + i * 4 * scale + 2, 64 + bob + 2, scale, Framebuffer.Lerp(c, Black, 0.65f));
-            fb.Text(name[i].ToString(), x + i * 4 * scale, 64 + bob, scale, c);
-        }
-        if ((int)(g.Time * 2) % 2 == 0) fb.TextCentered("PRESS ENTER", 152, 3, Ink);
+
+        // The generated NEON STACK lockup, bobbing gently where the text title used to sit.
+        int w = 528;
+        int h = Math.Max(1, (int)MathF.Round(w * (float)TitleLogo.H / TitleLogo.W));
+        int bob = (int)(Math.Sin(g.Time * 1.6f) * 3);
+        fb.Blit(TitleLogo, (Framebuffer.W - w) / 2, 32 + bob, w, h);
+
+        if ((int)(g.Time * 2) % 2 == 0) fb.TextCentered("PRESS ENTER", 150, 3, Ink);
 
         fb.TextCentered("ARROWS OR WASD  MOVE", 192, 2, Dim);
         fb.TextCentered("UP OR X  ROTATE   Z  ROTATE BACK", 208, 2, Dim);
@@ -229,8 +239,8 @@ public sealed class Scene
 
         var lv = TetrisGame.Levels[g.SelectedLevel];
         fb.TextCentered("<  " + (g.SelectedLevel + 1) + "  " + lv.Name + "  >", 280, 2, Framebuffer.Hex(0xFFD93D));
-        if (g.Best > 0) fb.TextCentered("BEST " + g.Best, 300, 2, Framebuffer.Hex(0x5B6288));
-        fb.TextCentered("BUILT ON BRUTAL", 318, 2, Framebuffer.Hex(0x5B6288));
+        if (g.Best > 0) fb.TextCentered("BEST " + g.Best, 302, 2, Framebuffer.Hex(0x5B6288));
+        fb.TextCentered("BUILT ON BRUTAL", 322, 2, Framebuffer.Hex(0x5B6288));
     }
 
     // ------------------------------------------------------------ campaign screens

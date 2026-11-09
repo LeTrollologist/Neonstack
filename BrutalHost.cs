@@ -98,6 +98,20 @@ public sealed unsafe class BrutalHost : IDisposable
 
     public bool Running => !window.ShouldClose;
 
+    /// <summary>
+    /// Sets the window/taskbar icon from an embedded image. GLFW takes 8-bit RGBA rows, which is
+    /// exactly the layout <see cref="ImageData"/> decodes to.
+    /// </summary>
+    public unsafe void SetWindowIcon(ImageData icon)
+    {
+        if (icon.W <= 0 || icon.H <= 0) return;
+        fixed (uint* pixels = icon.Pixels)
+        {
+            var image = new GlfwImage { Width = icon.W, Height = icon.H, Pixels = (byte*)pixels };
+            window.SetIcon(1, image);
+        }
+    }
+
     /// <summary>Integer multiple of the design space that the current window can display 1:1.</summary>
     public int RenderScale
     {

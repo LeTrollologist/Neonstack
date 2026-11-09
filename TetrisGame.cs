@@ -5,8 +5,8 @@ public enum Phase { Title, Playing, Paused, Clearing, LevelClear, Over, Won, Cre
 
 public sealed class Piece { public int Type, Rot, X, Y; }
 
-/// <summary>One campaign level: a name, a line goal and a fixed gravity interval.</summary>
-public readonly record struct LevelDef(string Name, int TargetLines, float Gravity);
+/// <summary>One campaign level: a name, a line goal, a fixed gravity interval and its neon accent.</summary>
+public readonly record struct LevelDef(string Name, int TargetLines, float Gravity, int Accent);
 
 public struct Particle { public float X, Y, Vx, Vy, Life, Max; public uint Color; public int Size; }
 
@@ -22,19 +22,19 @@ public sealed class TetrisGame
     const float Das = 0.16f, Arr = 0.04f, LockDelay = 0.5f;
     const float LevelClearDur = 3.2f;
 
-    /// <summary>The campaign. Each level is a line goal plus a fixed drop interval.</summary>
+    /// <summary>The campaign. Each level is a line goal, a fixed drop interval and an accent colour.</summary>
     public static readonly LevelDef[] Levels =
     {
-        new("NEON DAWN",   10, 0.85f),
-        new("STATIC BLOOM", 12, 0.72f),
-        new("CIRCUIT RAIN", 14, 0.62f),
-        new("VOLT RUSH",    16, 0.53f),
-        new("GRIDLOCK",     18, 0.45f),
-        new("CHROME FALL",  20, 0.38f),
-        new("AFTERGLOW",    22, 0.32f),
-        new("OVERCLOCK",    24, 0.27f),
-        new("BLACKOUT",     26, 0.22f),
-        new("FINAL STACK",  30, 0.17f),
+        new("NEON DAWN",   10, 0.85f, 0x22E5FF),
+        new("STATIC BLOOM", 12, 0.72f, 0x4D7CFF),
+        new("CIRCUIT RAIN", 14, 0.62f, 0x4DFF9A),
+        new("VOLT RUSH",    16, 0.53f, 0xFFD93D),
+        new("GRIDLOCK",     18, 0.45f, 0xFF9A3C),
+        new("CHROME FALL",  20, 0.38f, 0x9AA4D0),
+        new("AFTERGLOW",    22, 0.32f, 0xFF4D6D),
+        new("OVERCLOCK",    24, 0.27f, 0xFF6FD8),
+        new("BLACKOUT",     26, 0.22f, 0x8B5BFF),
+        new("FINAL STACK",  30, 0.17f, 0xF2F5FF),
     };
 
     // I J L O S T Z
@@ -120,6 +120,13 @@ public sealed class TetrisGame
     public readonly List<Particle> Particles = new();
     public readonly List<Popup> Popups = new();
 
+    /// <summary>Result of the corner test at the last lock (read by the renderer and the tests).</summary>
+    public bool SpinDetected { get; private set; }
+    public bool SpinMini { get; private set; }
+
+    /// <summary>True while the last clear was a "difficult" clear, so the next one pays the 1.5x B2B bonus.</summary>
+    public bool BackToBack => backToBack;
+
     // Settings / leaderboard UI state (read by Scene).
     public int SettingsIndex { get; private set; }
     public const int SettingsRows = 7;
@@ -143,6 +150,10 @@ public sealed class TetrisGame
     readonly bool[] press = new bool[(int)Key.Count];
     float grav, lockT, dasT, arrT, overT;
     int lockResets, dasDir, lowY;
+    bool lastRotate;        // the last successful movement was a rotation (T-spin requirement)
+    bool lastKickSpecial;   // that rotation used the fifth kick test (a full, not mini, T-spin)
+    bool backToBack;
+    float confirmBlock;     // ignores Enter/Space for a moment after the intro hands over
 
     // Save data goes to a writable per-user folder, not next to the exe (which may be read-only).
     static string BestPath => SaveData.File("best.txt");
@@ -175,6 +186,12 @@ public sealed class TetrisGame
 
     public float GravityInterval() => LevelInfo.Gravity;
 
+    /// <summary>
+    /// Ignores Enter/Space for a short time. The intro and the title screen share those keys, so
+    /// without this the Enter that advances the BRUTAL splash would also start a campaign.
+    /// </summary>
+    public void SuppressConfirm(float seconds) => confirmBlock = Math.Max(confirmBlock, seconds);
+
     // ---------------------------------------------------------------- update
     bool Pr(Key k) => press[(int)k];
 
@@ -183,6 +200,12 @@ public sealed class TetrisGame
         dt = Math.Min(dt, 0.05f);
         Time += dt;
         for (int i = 0; i < prev.Length; i++) { press[i] = down[i] && !prev[i]; prev[i] = down[i]; }
+        if (confirmBlock > 0)
+        {
+            confirmBlock -= dt;
+            press[(int)Key.Enter] = false;
+            press[(int)Key.Space] = false;
+        }
         Shake = Math.Max(0f, Shake - dt * 30f);
         if (MsgT > 0) MsgT -= dt;
         if (Flash > 0) Flash = Math.Max(0f, Flash - dt * 3.2f);
@@ -253,13 +276,13 @@ public sealed class TetrisGame
         {
             switch (SettingsIndex)
             {
-                case 0: s.MusicVolume = Math.Clamp(s.MusicVolume + dir, 0, 10); break;
+                case 0: s.MusicVolume = Math.Clamp(s.MusicVolume + dir, 0, 10); Audio.Play(Sfx.Move); break;
                 case 1: s.SfxVolume = Math.Clamp(s.SfxVolume + dir, 0, 10); Audio.Play(Sfx.Move); break;
                 case 2: s.Ghost = !s.Ghost; Audio.Play(Sfx.Menu); break;
                 case 3: s.Scanlines = !s.Scanlines; Audio.Play(Sfx.Menu); break;
                 case 4: s.Shake = !s.Shake; Audio.Play(Sfx.Menu); break;
                 case 5: s.Fullscreen = !s.Fullscreen; fullscreenRequest = true; Audio.Play(Sfx.Menu); break;
-                case 6: Phase = Phase.Title; Audio.Play(Sfx.Menu); break;
+                case 6: break;   // BACK only responds to Enter/Esc, never to Left/Right
             }
             s.Save();
         }
@@ -325,6 +348,9 @@ public sealed class TetrisGame
         LevelIndex = Math.Clamp(index, 0, Levels.Length - 1);
         LevelLines = 0;
         Combo = 0;
+        backToBack = false;
+        SpinDetected = false;
+        SpinMini = false;
         Hold = -1;
         HoldUsed = false;
         bag.Clear();
@@ -419,6 +445,39 @@ public sealed class TetrisGame
 
     bool Fits(Piece p, int dx, int dy) => FitsAt(p.Type, p.Rot, p.X + dx, p.Y + dy);
 
+    /// <summary>A cell that blocks a T-spin corner: the walls, the floor and any settled block.</summary>
+    bool Blocked(int x, int y) => x < 0 || x >= Cols || y >= Rows || (y >= 0 && Board[x, y] != 0);
+
+    /// <summary>
+    /// Classic three-corner T-spin test. The piece must be a T, its last successful movement must
+    /// have been a rotation, and three of the four corners of its 3x3 box must be blocked. The spin is
+    /// "mini" when the two corners in front of the nub are not both blocked, unless that rotation
+    /// needed the fifth (last) kick test, which always produces a full T-spin.
+    /// </summary>
+    bool DetectTSpin(out bool mini)
+    {
+        mini = false;
+        if (Cur.Type != 5 || !lastRotate) return false;
+
+        int cx = Cur.X + 1, cy = Cur.Y + 1;
+        bool tl = Blocked(cx - 1, cy - 1), tr = Blocked(cx + 1, cy - 1);
+        bool bl = Blocked(cx - 1, cy + 1), br = Blocked(cx + 1, cy + 1);
+        int corners = (tl ? 1 : 0) + (tr ? 1 : 0) + (bl ? 1 : 0) + (br ? 1 : 0);
+        if (corners < 3) return false;
+
+        bool front = (Cur.Rot & 3) switch
+        {
+            0 => tl && tr,     // nub pointing up
+            1 => tr && br,     // pointing right
+            2 => bl && br,     // pointing down
+            _ => tl && bl,     // pointing left
+        };
+        mini = !front && !lastKickSpecial;
+        return true;
+    }
+
+    static string ClearLabel(int n) => n switch { 1 => "SINGLE", 2 => "DOUBLE", 3 => "TRIPLE", _ => "TETRIS" };
+
     void AfterMove()
     {
         if (!Fits(Cur, 0, 1) && lockResets < 15) { lockT = 0; lockResets++; }
@@ -428,6 +487,7 @@ public sealed class TetrisGame
     {
         if (!Fits(Cur, dx, 0)) return false;
         Cur.X += dx;
+        lastRotate = false;
         AfterMove();
         return true;
     }
@@ -436,11 +496,14 @@ public sealed class TetrisGame
     {
         int nr = (Cur.Rot + (dir == 0 ? 1 : 3)) & 3;
         var kicks = (Cur.Type == 0 ? KickI : KickJLSTZ)[dir][Cur.Rot];
-        foreach (var k in kicks)
+        for (int i = 0; i < kicks.Length; i++)
         {
+            var k = kicks[i];
             if (FitsAt(Cur.Type, nr, Cur.X + k.x, Cur.Y - k.y))
             {
                 Cur.Rot = nr; Cur.X += k.x; Cur.Y -= k.y;
+                lastRotate = true;
+                lastKickSpecial = i == 4;   // the 5th test produces the T-spin triple, never a mini
                 AfterMove();
                 Audio.Play(Sfx.Rotate);
                 return;
@@ -499,19 +562,70 @@ public sealed class TetrisGame
         }
 
         int n = ClearRows.Count;
-        if (n == 0) { Combo = 0; Spawn(NextType()); return; }
+
+        bool spin = DetectTSpin(out bool mini);
+        SpinDetected = spin;
+        SpinMini = mini;
+
+        // A T-spin with no lines still pays (400 x level) and keeps the B2B chain alive.
+        if (n == 0)
+        {
+            Combo = 0;
+            if (spin)
+            {
+                Score += 400 * Level;
+                Msg = "";
+                MsgT = 0f;
+                Shake = Math.Max(Shake, 2f);
+                Flash = 0.35f;
+                FlashColor = Framebuffer.Hex(0xC65BFF);
+                Audio.Play(Sfx.Clear1);
+                Popups.Add(new Popup
+                {
+                    Text = mini ? "T-SPIN MINI" : "T-SPIN", X = 320, Y = 118,
+                    T = 0f, Life = 0.9f, Color = Framebuffer.Hex(0xC65BFF),
+                });
+            }
+            Spawn(NextType());
+            return;
+        }
 
         Combo++;
-        Score += new[] { 0, 100, 300, 500, 800 }[n] * Level;
+
+        int baseScore;
+        string label;
+        if (spin)
+        {
+            // Guideline: mini singles/doubles 200/400, full singles/doubles/triples 800/1200/1600.
+            baseScore = mini ? n switch { 1 => 200, 2 => 400, _ => 200 * n }
+                             : n switch { 1 => 800, 2 => 1200, _ => 1600 };
+            label = (mini ? "T-SPIN MINI " : "T-SPIN ") + ClearLabel(n);
+        }
+        else
+        {
+            baseScore = n switch { 1 => 100, 2 => 300, 3 => 500, _ => 800 };
+            label = ClearLabel(n);
+        }
+
+        // Back-to-back: consecutive difficult clears (tetrises and T-spin clears) pay 1.5x.
+        bool difficult = n >= 4 || spin;
+        bool chained = difficult && backToBack;
+        if (chained) baseScore = baseScore * 3 / 2;
+        backToBack = difficult;
+
+        Score += baseScore * Level;
         if (Combo > 1) Score += 50 * (Combo - 1) * Level;
-        string label = n switch { 1 => "SINGLE", 2 => "DOUBLE", 3 => "TRIPLE", _ => "TETRIS" };
         Msg = "";
         MsgT = 0f;
         Shake = Math.Max(Shake, n * 2.5f);
         Audio.Play(n switch { 1 => Sfx.Clear1, 2 => Sfx.Clear2, 3 => Sfx.Clear3, _ => Sfx.Clear4 });
         Flash = 0.6f;
-        FlashColor = n >= 4 ? Framebuffer.Hex(0xFFD93D) : Framebuffer.Hex(0x22E5FF);
+        FlashColor = spin ? Framebuffer.Hex(0xC65BFF)
+                    : n >= 4 ? Framebuffer.Hex(0xFFD93D)
+                    : Framebuffer.Hex(0x22E5FF);
         Popups.Add(new Popup { Text = label, X = 320, Y = 118, T = 0f, Life = 1.0f, Color = FlashColor });
+        if (chained)
+            Popups.Add(new Popup { Text = "BACK TO BACK", X = 320, Y = 92, T = 0f, Life = 1.2f, Color = Framebuffer.Hex(0xFF9A3C) });
         if (Combo > 1)
             Popups.Add(new Popup { Text = "COMBO " + Combo, X = 320, Y = 148, T = 0f, Life = 1.1f, Color = Framebuffer.Hex(0xC65BFF) });
         foreach (int y in ClearRows)
@@ -561,6 +675,8 @@ public sealed class TetrisGame
     {
         Cur = new Piece { Type = type, Rot = 0, X = type == 3 ? 4 : 3, Y = type == 0 ? -1 : 0 };
         grav = 0; lockT = 0; lockResets = 0; lowY = Cur.Y;
+        lastRotate = false;
+        lastKickSpecial = false;
         if (!Fits(Cur, 0, 0)) GameOver();
     }
 
